@@ -9,7 +9,7 @@ from ugradio import sdr
 import numpy as np
 import time
 
-sample_rate = int(3.0e6)
+sample_rate = int(1.0e6)
 samples_per_block = 16384
 n_captures = 2
 
