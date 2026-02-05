@@ -20,7 +20,7 @@ fir_coeffs = np.array([0, 0, 0, 0, 0, 0, 0, 0,
                       dtype=np.int16)
 sdr.set_fir_coeffs(fir_coeffs)
 
-time.sleep(0.2)  # let buffers settle
+_ = sdr.capture_data(N)
 
 # capture data
 data = sdr.capture_data(nblocks=2)[1]
