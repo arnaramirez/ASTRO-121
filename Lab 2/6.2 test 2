@@ -1,0 +1,176 @@
+import numpy as np
+import os
+from rtlsdr import RtlSdr
+
+########################################
+# CONFIGURATION
+########################################
+
+HI_FREQ = 1420.405751e6        # HI rest frequency (Hz)
+
+sample_rate = 2.4e6            # Wider bandwidth (±1.2 MHz)
+gain = 40                      # Adjust after histogram check
+
+nblocks = 16
+nsamples = 2**18               # FFT length
+ntrials_line = 6               # Long integration
+ntrials_cal = 3                # Short calibration integration
+
+freq_offset = 250e3            # In-band frequency switching
+
+outdir = "data"
+os.makedirs(outdir, exist_ok=True)
+
+########################################
+# SET UP SDR
+########################################
+
+print("Initializing SDR...")
+sdr = RtlSdr()
+
+# IMPORTANT SETTINGS
+sdr.set_direct_sampling(0)     # Must be OFF for 1420 MHz
+sdr.sample_rate = sample_rate
+sdr.gain = gain
+
+print("SDR configured:")
+print(f"  Sample rate: {sample_rate/1e6:.2f} MS/s")
+print(f"  Gain: {gain} dB")
+print("")
+
+########################################
+# SYSTEM CHECK: ADC HISTOGRAM
+########################################
+
+def check_adc_levels():
+    print("Checking ADC histogram...")
+    sdr.center_freq = HI_FREQ
+    samples = sdr.read_samples(500000)
+
+    real_vals = np.real(samples)
+
+    print(f"Mean: {np.mean(real_vals):.4f}")
+    print(f"Std:  {np.std(real_vals):.4f}")
+    print("Histogram should look Gaussian and not clipped.\n")
+
+########################################
+# SPECTRUM CAPTURE FUNCTION
+########################################
+
+def capture_spectrum(lo_freq, label="", ntrials=4):
+    """
+    Capture averaged power spectra at specified LO frequency.
+    Saves one NPZ file per LO setting (averaged over trials).
+    """
+
+    print(f"\nTuning LO to {lo_freq/1e6:.6f} MHz ({label})")
+    sdr.center_freq = lo_freq
+
+    spectra = []
+
+    for trial in range(ntrials):
+        try:
+            print(f"  Trial {trial+1}/{ntrials}")
+
+            data = sdr.read_samples(nsamples * nblocks)
+
+            if data.size != nsamples * nblocks:
+                raise RuntimeError("Incorrect number of samples returned.")
+
+            data = data.reshape((nblocks, nsamples))
+
+            fft = np.fft.fftshift(
+                np.fft.fft(data, axis=1),
+                axes=1
+            )
+
+            power = np.abs(fft)**2
+            spec = np.mean(power, axis=0)
+
+            spectra.append(spec)
+
+        except Exception as e:
+            print("  ERROR during capture:", e)
+            print("  Continuing to next trial...\n")
+
+    spectra = np.array(spectra)
+    avg_spec = np.mean(spectra, axis=0)
+
+    # Frequency axis (baseband)
+    freqs = np.fft.fftshift(
+        np.fft.fftfreq(nsamples, d=1/sample_rate)
+    )
+
+    # Save averaged result only
+    fname = f"{outdir}/{label}_{lo_freq/1e6:.3f}MHz_avg.npz"
+
+    np.savez(
+        fname,
+        spectrum=avg_spec,
+        freqs=freqs,
+        lo_freq=lo_freq,
+        sample_rate=sample_rate,
+        nsamples=nsamples,
+        nblocks=nblocks,
+        ntrials=ntrials
+    )
+
+    print(f"Saved averaged spectrum → {fname}")
+
+    return avg_spec, freqs
+
+########################################
+# OPTIONAL: RUN SYSTEM CHECK
+########################################
+
+check_adc_levels()
+
+########################################
+# FREQUENCY-SWITCHED LINE MEASUREMENTS
+########################################
+
+print("\n=== HI LINE OBSERVATION ===")
+
+lo_upper = HI_FREQ - freq_offset
+lo_lower = HI_FREQ + freq_offset
+
+# HI in upper half
+spec_upper, freqs = capture_spectrum(
+    lo_upper,
+    label="hi_upper",
+    ntrials=ntrials_line
+)
+
+# HI in lower half
+spec_lower, freqs = capture_spectrum(
+    lo_lower,
+    label="hi_lower",
+    ntrials=ntrials_line
+)
+
+########################################
+# CALIBRATION MEASUREMENTS
+########################################
+
+print("\n=== CALIBRATION ===")
+
+input("Point horn at cold sky and press Enter...")
+spec_cold, _ = capture_spectrum(
+    lo_upper,
+    label="cold_sky",
+    ntrials=ntrials_cal
+)
+
+input("Point horn at warm load (people) and press Enter...")
+spec_warm, _ = capture_spectrum(
+    lo_upper,
+    label="warm_load",
+    ntrials=ntrials_cal
+)
+
+########################################
+# CLEAN UP
+########################################
+
+sdr.close()
+print("\nObservation complete.")
