@@ -50,7 +50,6 @@ def make_freq_axis(lo_freq):
 ############################
 
 def integrate(lo_freq, n_integrations, label):
-
     sdr.center_freq = lo_freq
     avg_spec = np.zeros(nsamples)
 
@@ -64,22 +63,19 @@ def integrate(lo_freq, n_integrations, label):
     ax.set_title(label)
 
     for i in range(n_integrations):
-
         samples = sdr.capture_data(nsamples)
 
-        # ---- DIMENSION FIX ----
-        if samples.ndim == 2:
-            # FFT each block
-            fft = np.fft.fftshift(
-                np.fft.fft(samples, axis=-1),
-                axes=-1
-            )
+        # --- FLATTEN / COLLAPSE DIMENSIONS ---
+        if samples.ndim > 1:
+            # collapse extra dimensions (batch, channels)
+            samples = samples.reshape(-1, nsamples)
+            fft = np.fft.fftshift(np.fft.fft(samples, axis=-1), axes=-1)
             power = np.abs(fft)**2
-            spec = np.mean(power, axis=0)  # average over blocks
+            spec = np.mean(power, axis=0)
         else:
             fft = np.fft.fftshift(np.fft.fft(samples))
             spec = np.abs(fft)**2
-        # ------------------------
+        # -------------------------------------
 
         avg_spec += spec
 
@@ -95,6 +91,7 @@ def integrate(lo_freq, n_integrations, label):
     plt.show()
 
     return avg_spec / n_integrations
+
 
 ############################
 # MAIN OBSERVATION FLOW
