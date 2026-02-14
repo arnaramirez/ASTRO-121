@@ -46,19 +46,7 @@ def make_freq_axis(lo_freq):
     return freqs + lo_freq
 
 ############################
-# OPTIONAL: HISTOGRAM CHECK
-############################
-
-def check_levels():
-    print("\nChecking ADC levels...")
-    samples = sdr.capture_data(nsamples)
-    plt.hist(np.real(samples.flatten()), bins=100)
-    plt.title("ADC Histogram (Real Part)")
-    plt.show()
-    print("Check for Gaussian shape and no clipping.")
-
-############################
-# INTEGRATION WITH DIMENSION FIX
+# INTEGRATION WITH LIVE PLOT
 ############################
 
 def integrate(lo_freq, n_integrations, label):
@@ -113,8 +101,6 @@ def integrate(lo_freq, n_integrations, label):
 ############################
 
 try:
-
-    check_levels()
 
     print("\n=== COLD SKY CALIBRATION ===")
     input("Aim horn at cold sky and press Enter...")
