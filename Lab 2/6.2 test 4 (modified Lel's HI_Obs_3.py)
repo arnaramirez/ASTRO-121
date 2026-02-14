@@ -9,18 +9,18 @@ import json
 # CONFIGURATION
 ############################
 
-HI_FREQ = 1420.405751e6      # Hydrogen rest frequency (Hz)
-c = 299792458                # Speed of light (m/s)
+HI_FREQ = 1420.405751e6  # Hydrogen rest frequency (Hz)
+c = 299792458            # Speed of light (m/s)
 
 sample_rate = 2.4e6
-nsamples_per_capture = 4096    # smaller chunks to prevent freezing
-n_captures_per_integration = 4 # 4 x 4096 = 16384 per integration
+nsamples = 4096          # small block size to avoid freezing
 gain = 40
 freq_offset = 200e3
 
-n_cal_integrations = 50
-n_obs_integrations = 100
-live_update_interval = 10
+# Start with small numbers; increase gradually once it works
+n_cal_integrations = 5
+n_obs_integrations = 5
+live_update_interval = 1  # plot every integration
 
 T_hot = 300
 T_cold = 10
@@ -42,21 +42,18 @@ print("SDR configured (direct=False)")
 # FREQUENCY AXIS FUNCTION
 ############################
 
-def make_freq_axis(lo_freq, nsamples_total):
-    freqs = np.fft.fftshift(np.fft.fftfreq(nsamples_total, d=1/sample_rate))
+def make_freq_axis(lo_freq, nsamples):
+    freqs = np.fft.fftshift(np.fft.fftfreq(nsamples, d=1/sample_rate))
     return freqs + lo_freq
 
 ############################
-# INTEGRATION FUNCTION
+# INTEGRATION FUNCTION (Pi-SAFE)
 ############################
 
 def integrate(lo_freq, n_integrations, label):
-
     sdr.center_freq = lo_freq
-    nsamples_total = nsamples_per_capture * n_captures_per_integration
-    avg_spec = np.zeros(nsamples_total)
-
-    rf_freqs = make_freq_axis(lo_freq, nsamples_total)
+    avg_spec = np.zeros(nsamples)
+    rf_freqs = make_freq_axis(lo_freq, nsamples)
 
     plt.ion()
     fig, ax = plt.subplots()
@@ -66,42 +63,30 @@ def integrate(lo_freq, n_integrations, label):
     ax.set_title(label)
 
     for i in range(n_integrations):
-        integration_spec = np.zeros(nsamples_total)
+        samples = sdr.capture_data(nsamples)
 
-        # capture multiple small chunks per integration
-        for j in range(n_captures_per_integration):
-            samples = sdr.capture_data(nsamples_per_capture)
+        # Flatten any extra dimensions
+        if samples.ndim > 1:
+            samples = samples.reshape(-1)
 
-            # Flatten any extra dimensions
-            if samples.ndim > 1:
-                samples = samples.reshape(-1, nsamples_per_capture)
-                fft = np.fft.fftshift(np.fft.fft(samples, axis=-1), axes=-1)
-                power = np.abs(fft)**2
-                spec = np.mean(power, axis=0)
-            else:
-                fft = np.fft.fftshift(np.fft.fft(samples))
-                spec = np.abs(fft)**2
+        # FFT and power
+        fft = np.fft.fftshift(np.fft.fft(samples))
+        power = np.abs(fft)**2
 
-            # place into the correct portion of integration_spec
-            start_idx = j * nsamples_per_capture
-            integration_spec[start_idx:start_idx+nsamples_per_capture] = spec
-
-            time.sleep(0.005)  # small pause to prevent SDR freeze
-
-        avg_spec += integration_spec
+        avg_spec += power
 
         # live plot update
         if (i+1) % live_update_interval == 0:
-            current_avg = avg_spec / (i+1)
-            line.set_ydata(current_avg)
+            line.set_ydata(avg_spec / (i+1))
             ax.relim()
             ax.autoscale_view()
             plt.pause(0.01)
             print(f"{label}: {i+1}/{n_integrations}")
 
+        time.sleep(0.01)  # small pause to prevent freezing
+
     plt.ioff()
     plt.show()
-
     return avg_spec / n_integrations
 
 ############################
@@ -142,7 +127,7 @@ try:
     # Calibrate to antenna temperature
     T_ant = T_sys * (diff_spec / P_cold)
 
-    rf_freqs = make_freq_axis(lo_upper, nsamples_per_capture * n_captures_per_integration)
+    rf_freqs = make_freq_axis(lo_upper, nsamples)
     velocity = c * (HI_FREQ - rf_freqs) / HI_FREQ / 1000  # km/s
 
     ############################
@@ -162,8 +147,7 @@ try:
         "lo_lower_Hz": lo_lower,
         "sample_rate_Hz": sample_rate,
         "gain_dB": gain,
-        "nsamples_per_capture": nsamples_per_capture,
-        "n_captures_per_integration": n_captures_per_integration,
+        "nsamples": nsamples,
         "n_cal_integrations": n_cal_integrations,
         "n_obs_integrations": n_obs_integrations,
         "T_sys_K": float(T_sys),
