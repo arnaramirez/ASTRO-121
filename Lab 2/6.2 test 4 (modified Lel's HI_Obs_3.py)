@@ -17,7 +17,6 @@ nsamples = 2**14
 gain = 40
 freq_offset = 200e3
 
-# Radio astronomy integration depths
 n_cal_integrations = 2000
 n_obs_integrations = 5000
 live_update_interval = 50
@@ -53,13 +52,13 @@ def make_freq_axis(lo_freq):
 def check_levels():
     print("\nChecking ADC levels...")
     samples = sdr.capture_data(nsamples)
-    plt.hist(np.real(samples), bins=100)
+    plt.hist(np.real(samples.flatten()), bins=100)
     plt.title("ADC Histogram (Real Part)")
     plt.show()
     print("Check for Gaussian shape and no clipping.")
 
 ############################
-# INTEGRATION WITH LIVE PLOT
+# INTEGRATION WITH DIMENSION FIX
 ############################
 
 def integrate(lo_freq, n_integrations, label):
@@ -79,10 +78,22 @@ def integrate(lo_freq, n_integrations, label):
     for i in range(n_integrations):
 
         samples = sdr.capture_data(nsamples)
-        fft = np.fft.fftshift(np.fft.fft(samples))
-        power = np.abs(fft)**2
 
-        avg_spec += power
+        # ---- DIMENSION FIX ----
+        if samples.ndim == 2:
+            # FFT each block
+            fft = np.fft.fftshift(
+                np.fft.fft(samples, axis=-1),
+                axes=-1
+            )
+            power = np.abs(fft)**2
+            spec = np.mean(power, axis=0)  # average over blocks
+        else:
+            fft = np.fft.fftshift(np.fft.fft(samples))
+            spec = np.abs(fft)**2
+        # ------------------------
+
+        avg_spec += spec
 
         if (i+1) % live_update_interval == 0:
             current_avg = avg_spec / (i+1)
