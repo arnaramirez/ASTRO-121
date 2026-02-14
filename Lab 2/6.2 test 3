@@ -1,0 +1,162 @@
+
+import numpy as np
+import ugradio
+import matplotlib.pyplot as plt
+import os
+import time
+import json
+
+############################
+# CONFIGURATION
+############################
+
+HI_FREQ = 1420.405751e6
+freq_offset = 200e3          # Avoid DC spike
+LO_FREQ = HI_FREQ - freq_offset
+
+sample_rate = 2.4e6
+nsamples = 2**14
+gain = 40
+
+n_cal_integrations = 2000
+n_obs_integrations = 5000
+
+T_hot = 300
+T_cold = 10
+
+outdir = "data"
+os.makedirs(outdir, exist_ok=True)
+
+############################
+# SETUP SDR (direct=False)
+############################
+
+sdr = ugradio.sdr.SDR(direct=False)
+sdr.sample_rate = sample_rate
+sdr.center_freq = LO_FREQ
+sdr.gain = gain
+
+############################
+# FREQUENCY AXIS
+############################
+
+freqs = np.fft.fftshift(
+    np.fft.fftfreq(nsamples, d=1/sample_rate)
+)
+rf_freqs = freqs + LO_FREQ
+
+############################
+# LIVE INTEGRATION FUNCTION
+############################
+
+def integrate_spectrum(n_integrations, label=""):
+
+    avg_spec = np.zeros(nsamples)
+
+    plt.ion()
+    fig, ax = plt.subplots()
+    line, = ax.plot(rf_freqs/1e6, avg_spec)
+    ax.set_xlabel("Frequency (MHz)")
+    ax.set_ylabel("Power (arb)")
+    ax.set_title(f"Integrating: {label}")
+    plt.show()
+
+    for i in range(n_integrations):
+
+        samples = sdr.capture_data(nsamples)
+        fft = np.fft.fftshift(np.fft.fft(samples))
+        power = np.abs(fft)**2
+
+        avg_spec += power
+
+        # Update plot every 50 integrations
+        if i % 50 == 0:
+            current_avg = avg_spec / (i+1)
+            line.set_ydata(current_avg)
+            ax.relim()
+            ax.autoscale_view()
+            plt.pause(0.01)
+
+        if i % 500 == 0:
+            print(f"{label}: {i}/{n_integrations}")
+
+    plt.ioff()
+    return avg_spec / n_integrations
+
+############################
+# ===== CALIBRATION =====
+############################
+
+print("\n=== COLD SKY CALIBRATION ===")
+input("Aim horn at cold sky and press Enter...")
+s_cold = integrate_spectrum(n_cal_integrations, "Cold Sky")
+
+print("\n=== HOT LOAD CALIBRATION ===")
+input("Place human in front of horn and press Enter...")
+s_hot = integrate_spectrum(n_cal_integrations, "Hot Load")
+
+P_cold = np.mean(s_cold)
+P_hot = np.mean(s_hot)
+
+Y = P_hot / P_cold
+T_sys = (T_hot - Y*T_cold) / (Y - 1)
+
+print(f"\nY-factor: {Y:.3f}")
+print(f"System temperature: {T_sys:.2f} K")
+
+############################
+# ===== HYDROGEN OBS =====
+############################
+
+print("\n=== HYDROGEN OBSERVATION ===")
+input("Aim horn at zenith and press Enter...")
+spec_obs = integrate_spectrum(n_obs_integrations, "Hydrogen")
+
+############################
+# CALIBRATE TO TEMPERATURE
+############################
+
+T_ant = T_sys * (spec_obs - s_cold) / s_cold
+
+############################
+# METADATA
+############################
+
+metadata = {
+    "local_time": ugradio.timing.local_time(),
+    "utc_time": ugradio.timing.utc(),
+    "unix_time": ugradio.timing.unix_time(),
+    "julian_date": ugradio.timing.julian_date(),
+    "lst": ugradio.timing.lst(),
+    "latitude": ugradio.nch.lat,
+    "longitude": ugradio.nch.lon,
+    "HI_rest_freq_Hz": HI_FREQ,
+    "LO_freq_Hz": LO_FREQ,
+    "sample_rate_Hz": sample_rate,
+    "gain_dB": gain,
+    "n_cal_integrations": n_cal_integrations,
+    "n_obs_integrations": n_obs_integrations,
+    "T_sys_K": float(T_sys),
+    "Y_factor": float(Y)
+}
+
+timestamp = int(time.time())
+
+############################
+# SAVE
+############################
+
+np.savez(
+    f"{outdir}/hi_observation_{timestamp}.npz",
+    freq_Hz=rf_freqs,
+    temperature_K=T_ant,
+    spec_obs=spec_obs,
+    s_cold=s_cold,
+    s_hot=s_hot
+)
+
+with open(f"{outdir}/metadata_{timestamp}.json", "w") as f:
+    json.dump(metadata, f, indent=4)
+
+print("\nObservation complete and saved.")
+sdr.close()
