@@ -210,14 +210,33 @@ velocity = c * (HI_FREQ - rf_upper) / HI_FREQ / 1000  # km/s
 # 4 Save Results
 ############################
 
-np.savez(
-    os.path.join(outdir, "hi_21cm_final_sdr_longint_freqswitch.npz"),
-    freq_Hz=rf_upper,
-    velocity_kms=velocity,
-    temperature_K=T_ant,
-    T_sys_K=T_sys,
-    Y_factor=Y
-)
+np.savez(os.path.join(outdir, "hi_21cm_final_sdr_longint_freqswitch.npz"),
+         freq_Hz=rf_upper,
+         velocity_kms=velocity,
+         temperature_K=T_ant,
+         data_cold=data_cold,
+         s_cold=spec_cold,
+         data_hot=data_hot,
+         s_hot=spec_hot,
+         upper_volt=upper_blocks_volt,
+         upper_power=upper_blocks_power,
+         lower_volt=lower_blocks_volt,
+         lower_power=lower_blocks_power,
+         spec_upper_avg=spec_upper_avg,
+         spec_lower_avg=spec_lower_avg,
+         diff_spec=diff_spec,
+         T_sys_K=T_sys,
+         Y_factor=Y,
+         HI_rest_freq_Hz=HI_FREQ,
+         lo_upper_Hz=HI_FREQ - freq_offset,
+         lo_lower_Hz=HI_FREQ + freq_offset,
+         nsamples=nsamples,
+         nblocks_cal=nblocks_cal,
+         nblocks_obs=nblocks_obs,
+         unix_time=ugradio.timing.unix_time(),
+         latitude_deg=ugradio.nch.lat,
+         longitude_deg=ugradio.nch.lon
+         )
 
 print("Observation complete and saved.")
 
