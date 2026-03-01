@@ -5,27 +5,23 @@ import time
 # ---------- SDR SETTINGS ----------
 CENTER_FREQ = 1420e6
 SAMPLE_RATE = 250000
-GAIN = 20
+GAIN = 5              # LOWER GAIN
 CHUNK_SIZE = 8192
 SLEEP_TIME = 0.005
 # -----------------------------------
 
 def safe_capture(integration_time):
-    """
-    Captures IQ samples safely from the SDR.
-    """
 
     sdr = ugradio.sdr.SDR(center_freq=CENTER_FREQ,
                           sample_rate=SAMPLE_RATE,
                           gain=GAIN)
 
-    # Force tuner mode (disable direct sampling)
     try:
         sdr.rtl.set_direct_sampling(0)
     except:
         pass
 
-    time.sleep(0.2)  # allow PLL to stabilize
+    time.sleep(0.3)
 
     total_samples = int(SAMPLE_RATE * integration_time)
     collected = 0
@@ -34,8 +30,8 @@ def safe_capture(integration_time):
     while collected < total_samples:
         data = sdr.capture_data(CHUNK_SIZE)
 
-        # Remove NaNs if present
-        data = data[~np.isnan(data)]
+        # Remove non-finite values
+        data = data[np.isfinite(data)]
 
         if len(data) > 0:
             buffers.append(data)
@@ -45,61 +41,49 @@ def safe_capture(integration_time):
 
     sdr.close()
 
+    if len(buffers) == 0:
+        return np.array([])
+
     return np.concatenate(buffers)
 
+
 # ---------- USER INPUT ----------
-input_power_dbm = -40    # generator output in dBm
+input_power_dbm = -50   # SET GENERATOR TO -50 dBm
 R = 50
 integration_time = 1
 # --------------------------------
 
-# Convert generator power to true Vrms
-P_watts = 10**((input_power_dbm - 30)/10)
-V_rms_true = np.sqrt(P_watts * R)
+print("\nCapturing calibration tone...")
 
-print("Capturing calibration tone...")
 data = safe_capture(integration_time)
 
-# Make sure we actually captured data
 if len(data) == 0:
     print("ERROR: No valid samples captured.")
     exit()
 
-# Digital RMS (correct way)
-V_meas = np.sqrt(np.mean(np.abs(data)**2))
+print("Sample stats:")
+print("Min:", np.min(data))
+print("Max:", np.max(data))
 
-# Calibration factor
+# Check for saturation
+if np.max(np.abs(data)) > 0.9:
+    print("WARNING: Possible ADC saturation.")
+
+# True Vrms from generator
+P_watts = 10**((input_power_dbm - 30)/10)
+V_rms_true = np.sqrt(P_watts * R)
+
+# Measured RMS
+power_lin = np.mean(np.abs(data)**2)
+
+if power_lin <= 0:
+    print("ERROR: Non-positive measured power.")
+    exit()
+
+V_meas = np.sqrt(power_lin)
+
 K = V_rms_true / V_meas
 
-print("True Vrms:", V_rms_true)
+print("\nTrue Vrms:", V_rms_true)
 print("Measured digital RMS:", V_meas)
-print("Voltage scale factor (Volts per digital unit):", K)
-
-# ---------- Cable Loss Section ----------
-
-def measure_power_db():
-    data = safe_capture(0.5)
-
-    if len(data) == 0:
-        return np.nan
-
-    power_lin = np.mean(np.abs(data)**2)
-    return 10 * np.log10(power_lin)
-
-print("\nMeasure SHORT cable...")
-P_short = measure_power_db()
-
-print("Measure LONG cable...")
-P_long = measure_power_db()
-
-if np.isnan(P_short) or np.isnan(P_long):
-    print("ERROR: Invalid power measurement.")
-else:
-    L = 5.0  # cable length difference in meters
-    delta_P = P_short - P_long
-    alpha_db_per_m = delta_P / L
-
-    print("Short cable power (dB):", P_short)
-    print("Long cable power (dB):", P_long)
-    print("Total loss (dB):", delta_P)
-    print("Loss per meter (dB/m):", alpha_db_per_m)
+print("Voltage scale factor (V per digital unit):", K)
