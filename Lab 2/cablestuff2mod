@@ -1,0 +1,69 @@
+import numpy as np
+import ugradio
+import time
+
+CENTER_FREQ = 1420e6
+SAMPLE_RATE = 250000
+GAIN = 20
+CHUNK_SIZE = 8192
+SLEEP_TIME = 0.005
+
+def safe_capture(integration_time):
+    sdr = ugradio.sdr.SDR(center_freq=CENTER_FREQ,
+                          sample_rate=SAMPLE_RATE,
+                          gain=GAIN)
+    
+    time.sleep(0.1)
+
+    total_samples = int(SAMPLE_RATE * integration_time)
+    collected = 0
+    buffers = []
+
+    while collected < total_samples:
+        data = sdr.capture_data(CHUNK_SIZE)
+        buffers.append(data)
+        collected += len(data)
+        time.sleep(SLEEP_TIME)
+
+    return np.concatenate(buffers)
+
+# ---- Voltage Calibration ----
+
+input_power_dbm = -40
+R = 50
+integration_time = 1
+
+P_watts = 10**((input_power_dbm - 30)/10)
+V_rms_true = np.sqrt(P_watts * R)
+
+print("Capturing calibration tone...")
+data = safe_capture(integration_time)
+
+V_meas = np.sqrt(np.mean(np.abs(data)**2))
+
+K = V_rms_true / V_meas
+
+print("True Vrms:", V_rms_true)
+print("Measured digital RMS:", V_meas)
+print("Voltage scale factor (V per digital unit):", K)
+
+# ---- Cable Loss ----
+
+def measure_power_db():
+    data = safe_capture(0.5)
+    power_lin = np.mean(np.abs(data)**2)
+    return 10 * np.log10(power_lin)
+
+print("Measure SHORT cable...")
+P_short = measure_power_db()
+
+print("Measure LONG cable...")
+P_long = measure_power_db()
+
+delta_P = P_short - P_long
+L = 5.0
+
+alpha_db_per_m = delta_P / L
+
+print("Total loss (dB):", delta_P)
+print("Loss per meter (dB/m):", alpha_db_per_m)
