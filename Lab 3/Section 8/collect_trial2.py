@@ -22,7 +22,6 @@ filename = "sun_observation.npy"
 
 # --- Storage buffers ---
 data = []
-acc_cnt_prev = None
 
 def get_sun_altaz():
     jd = ugradio.timing.julian_date()
@@ -62,15 +61,14 @@ last_point_time = time.time()
 
 try:
     while True:
-        # --- Update pointing every 30 seconds (FIXED) ---
+        # --- Update pointing every 30 seconds ---
         if time.time() - last_point_time > 30:
             alt, az = get_sun_altaz()
             safe_point(alt, az)
             last_point_time = time.time()
 
-        # --- Read SNAP data ---
-        d = spec.read_data(acc_cnt=acc_cnt_prev)
-        acc_cnt_prev = d['acc_cnt']
+        # --- Read SNAP data (no acc_cnt argument) ---
+        d = spec.read_data()
 
         # --- Save full spectrum ---
         data.append({
