@@ -1,7 +1,5 @@
 import time
 import numpy as np
-import matplotlib.pyplot as plt
-from collections import deque
 import ugradio
 from snap_spec.snap import UGRadioSnap
 
@@ -22,7 +20,6 @@ filename = "sun_observation.npy"
 
 # --- Storage ---
 data = []
-acc_cnt_prev = None
 
 # --- Functions ---
 def get_sun_altaz(jd):
@@ -36,16 +33,6 @@ def safe_point(alt, az):
         return False
     ifm.point(alt, az)
     return True
-
-# --- Live plotting setup ---
-plt.ion()
-fig, ax = plt.subplots()
-line, = ax.plot([], [])
-ax.set_title("Live Fringe (Channel 500 or last available)")
-ax.set_xlabel("Sample")
-ax.set_ylabel("Amplitude")
-buffer_size = 200
-ydata = deque(maxlen=buffer_size)
 
 # --- Initial pointing ---
 jd = ugradio.timing.julian_date()
@@ -84,14 +71,14 @@ try:
             az_meas = None
 
         # --- Read SNAP data ---
-        d = spec.read_data()  # remove acc_cnt; newer API doesn’t use it
-        acc_cnt_prev = d.get('acc_cnt', None)
+        d = spec.read_data()  # No acc_cnt argument
+        acc_cnt = d.get('acc_cnt', None)
 
         # --- Save all data ---
         data.append({
             'time_unix': t_unix,
             'jd': jd,
-            'acc_cnt': d.get('acc_cnt', None),
+            'acc_cnt': acc_cnt,
             'ra': ra,
             'dec': dec,
             'alt_cmd': alt_cmd,
@@ -102,21 +89,7 @@ try:
             'corr_imag': d['corr00'].imag
         })
 
-        # --- Live plot (safe channel selection) ---
-        corr = d['corr00'].real
-        channel_index = 500 if len(corr) > 500 else -1
-        value = corr[channel_index]
-        ydata.append(value)
-
-        if len(ydata) % 5 == 0:
-            line.set_xdata(range(len(ydata)))
-            line.set_ydata(ydata)
-            ax.relim()
-            ax.autoscale_view()
-            plt.draw()
-            plt.pause(0.01)
-
-        print(f"acc_cnt: {d.get('acc_cnt', 'N/A')}")
+        print(f"acc_cnt: {acc_cnt}")
 
 except KeyboardInterrupt:
     print("Stopping observation...")
