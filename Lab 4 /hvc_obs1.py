@@ -1,9 +1,9 @@
-import os
 import csv
 import time
 from pathlib import Path
 
 import numpy as np
+import ugradio
 from astropy.coordinates import SkyCoord, EarthLocation, AltAz
 from astropy.time import Time
 import astropy.units as u
@@ -11,9 +11,13 @@ import astropy.units as u
 from leusch_module import LeuschTelescope, Spectrometer
 
 # --------------------------------------------------
-# Site coordinates from leo.py
+# Site coordinates from ugradio.leo
 # --------------------------------------------------
-SITE = EarthLocation(lat=37.9183 * u.deg, lon=-122.1067 * u.deg, height=304 * u.m)
+SITE = EarthLocation(
+    lat=ugradio.leo.lat * u.deg,
+    lon=ugradio.leo.lon * u.deg,
+    height=ugradio.leo.alt * u.m,
+)
 
 # Telescope safety bounds
 ALT_MIN = 15.0
@@ -28,9 +32,9 @@ OUTDIR.mkdir(parents=True, exist_ok=True)
 LOGFILE = OUTDIR / "observation_log.csv"
 
 # Number of spectra to accumulate per pointing
-NSPEC = 60  # placeholder; set from desired integration time
+NSPEC = 60  # placeholder; update once you know required integration time
 
-# How long to wait if nothing is currently observable
+# Sleep time if no targets are currently observable
 SLEEP_IF_NONE_VISIBLE = 300  # seconds
 
 
@@ -40,7 +44,7 @@ def make_serpentine_grid(l_min=60, l_max=180, b_min=20, b_max=60, dl=4, db=4):
 
     Returns
     -------
-    targets : list of tuples
+    list of tuples
         [(l_deg, b_deg), ...]
     """
     l_vals = np.arange(l_min, l_max + 0.1, dl)
@@ -56,18 +60,18 @@ def make_serpentine_grid(l_min=60, l_max=180, b_min=20, b_max=60, dl=4, db=4):
 
 def gal_to_altaz(l_deg, b_deg, obstime):
     """
-    Convert Galactic coordinates to ICRS and Alt/Az for a given observing time.
+    Convert Galactic coordinates to ICRS and Alt/Az.
 
     Parameters
     ----------
     l_deg, b_deg : float
         Galactic longitude and latitude in degrees.
     obstime : astropy.time.Time
-        Observation time.
+        Time of observation.
 
     Returns
     -------
-    ra_deg, dec_deg, alt_deg, az_deg : floats
+    ra_deg, dec_deg, alt_deg, az_deg : float
     """
     gal = SkyCoord(l=l_deg * u.deg, b=b_deg * u.deg, frame="galactic")
     icrs = gal.icrs
@@ -75,11 +79,11 @@ def gal_to_altaz(l_deg, b_deg, obstime):
     return icrs.ra.deg, icrs.dec.deg, altaz.alt.deg, altaz.az.deg
 
 
-def observable(alt, az):
+def observable(alt_deg, az_deg):
     """
-    Check whether a target is safely observable.
+    Check whether a target is within safe telescope bounds.
     """
-    return (ALT_MIN < alt < ALT_MAX) and (AZ_MIN < az < AZ_MAX)
+    return (ALT_MIN < alt_deg < ALT_MAX) and (AZ_MIN < az_deg < AZ_MAX)
 
 
 def append_log(row):
@@ -94,7 +98,40 @@ def append_log(row):
         writer.writerow(row)
 
 
+def choose_next_target(remaining, now):
+    """
+    Choose the first currently visible target in serpentine order.
+
+    Parameters
+    ----------
+    remaining : list
+        Remaining targets [(l_deg, b_deg), ...]
+    now : astropy.time.Time
+        Current time.
+
+    Returns
+    -------
+    tuple or None
+        (idx, l_deg, b_deg, ra_deg, dec_deg, alt_deg, az_deg)
+        or None if nothing is visible.
+    """
+    for idx, (l_deg, b_deg) in enumerate(remaining):
+        ra_deg, dec_deg, alt_deg, az_deg = gal_to_altaz(l_deg, b_deg, now)
+        if observable(alt_deg, az_deg):
+            return idx, l_deg, b_deg, ra_deg, dec_deg, alt_deg, az_deg
+    return None
+
+
 def main():
+    print("=" * 60)
+    print("Leuschner HI HVC Mapping Script")
+    print("=" * 60)
+    print(f"Site latitude : {ugradio.leo.lat:.4f} deg")
+    print(f"Site longitude: {ugradio.leo.lon:.4f} deg")
+    print(f"Site altitude : {ugradio.leo.alt:.1f} m")
+    print(f"Output dir    : {OUTDIR}")
+    print()
+
     tel = LeuschTelescope()
     spec = Spectrometer()
 
@@ -104,39 +141,33 @@ def main():
     try:
         tint = spec.int_time()
         print(f"Integration time per spectrum: {tint:.3f} s")
-        print(f"Total time per pointing: {NSPEC * tint / 60:.2f} min")
+        print(f"Total integration per pointing: {NSPEC * tint / 60:.2f} min")
     except Exception as e:
         print("Could not get spectrometer integration time:", e)
         tint = None
 
     while remaining:
-        # Use one shared astropy time object for this scheduling pass
         now = Time.now()
+        chosen = choose_next_target(remaining, now)
 
-        visible = []
-        for idx, (l_deg, b_deg) in enumerate(remaining):
-            ra_deg, dec_deg, alt_deg, az_deg = gal_to_altaz(l_deg, b_deg, now)
-            if observable(alt_deg, az_deg):
-                visible.append((idx, l_deg, b_deg, ra_deg, dec_deg, alt_deg, az_deg))
-
-        if not visible:
+        if chosen is None:
             print(f"No targets currently observable. Sleeping {SLEEP_IF_NONE_VISIBLE} s.")
             time.sleep(SLEEP_IF_NONE_VISIBLE)
             continue
 
-        # Choose the first visible target in the precomputed serpentine order
-        idx, l_deg, b_deg, ra_deg, dec_deg, alt_deg, az_deg = visible[0]
+        idx, l_deg, b_deg, ra_deg, dec_deg, alt_deg, az_deg = chosen
 
-        # Use one shared observation timestamp for filename + log
+        # One shared timestamp for filename + log entry
         obs_time = Time.now()
         stamp = obs_time.utc.strftime("%Y%m%dT%H%M%S")
 
         fname = OUTDIR / f"hvc_l{int(round(l_deg)):03d}_b{int(round(b_deg)):03d}_{stamp}.fits"
 
         print(f"\nObserving l={l_deg:.1f}, b={b_deg:.1f}")
-        print(f"  RA={ra_deg:.2f} deg, Dec={dec_deg:.2f} deg")
-        print(f"  Alt={alt_deg:.2f} deg, Az={az_deg:.2f} deg")
-        print(f"  UTC={obs_time.isot}, JD={obs_time.jd:.8f}")
+        print(f"  RA={ra_deg:.3f} deg, Dec={dec_deg:.3f} deg")
+        print(f"  Alt={alt_deg:.3f} deg, Az={az_deg:.3f} deg")
+        print(f"  UTC={obs_time.isot}")
+        print(f"  JD ={obs_time.jd:.8f}")
 
         try:
             tel.point(alt_deg, az_deg, wait=True)
