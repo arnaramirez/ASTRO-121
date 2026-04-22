@@ -323,6 +323,12 @@ def main():
     print("[init] Connecting to noise diode...")
     noise = leusch.LeuschNoise()
 
+    print("[init] Ensuring noise diode is OFF")
+try:
+    noise.off()
+except Exception:
+    pass
+
     nspec_on, tint = estimate_nspec(spec, INTEGRATION_MIN)
     print(f"[init] Spectrometer integration time per spectrum: {tint:.3f} s")
     print(f"[init] Using nspec = {nspec_on} for {INTEGRATION_MIN:.1f} min on-source")
