@@ -171,7 +171,7 @@ T_ND_POL0 = 79.0
 T_ND_POL1 = 58.0
 
 # Calibration cadence: inject noise diode every N pointings
-CAL_EVERY_N = 5
+CAL_EVERY_N = 10
 
 # Min elevation for observing [deg]
 MIN_EL = 30.0   # hard lower limit -- Leuschner can observe reliably to 30deg
@@ -323,16 +323,33 @@ def make_survey_grid(l_min=L_MIN, l_max=L_MAX,
                      b_min=B_MIN, b_max=B_MAX,
                      spacing=GRID_SPACING_DEG):
     """
-    Generate a list of (l, b) pointings at Nyquist spacing.
-    Uses a boustrophedon (snake) pattern to minimise slew distance.
-    Returns list of dicts: {l, b, ra, dec, pointing_id}
+    Generate a list of (l, b) pointings with approximately constant
+    true angular spacing on the sky.
+
+    Latitude spacing is spacing.
+    Longitude spacing is spacing / cos(b), because true separation
+    along constant b is approximately dl * cos(b).
     """
-    l_vals = np.arange(l_min, l_max + spacing * 0.5, spacing)
     b_vals = np.arange(b_min, b_max + spacing * 0.5, spacing)
 
     grid = []
+    n_l_by_row = []
+
     for j, b in enumerate(b_vals):
-        row_l = l_vals if j % 2 == 0 else l_vals[::-1]  # snake pattern
+        cosb = np.cos(np.radians(b))
+
+        # Safety check, mostly irrelevant here since b = 20 to 60 deg
+        if cosb <= 0.05:
+            dl = spacing
+        else:
+            dl = spacing / cosb
+
+        l_vals = np.arange(l_min, l_max + dl * 0.5, dl)
+        n_l_by_row.append(len(l_vals))
+
+        # Snake pattern to reduce slewing
+        row_l = l_vals if j % 2 == 0 else l_vals[::-1]
+
         for l in row_l:
             ra, dec = gal_to_radec(l, b)
             grid.append(dict(
@@ -343,10 +360,12 @@ def make_survey_grid(l_min=L_MIN, l_max=L_MAX,
                 pointing_id=f"l{l:07.3f}_b{b:+07.3f}"
             ))
 
-    print(f"[grid] Survey grid: {len(grid)} pointings "
-          f"({len(l_vals)} in l x {len(b_vals)} in b)")
-    return grid
+    print(f"[grid] Survey grid: {len(grid)} pointings")
+    print(f"[grid] b rows: {len(b_vals)}")
+    print(f"[grid] l samples per row: min={min(n_l_by_row)}, max={max(n_l_by_row)}")
+    print(f"[grid] spacing target: {spacing:.2f} deg true angular spacing")
 
+    return grid
 
 # -----------------------------------------------------------------------------
 # 2.  PROGRESS TRACKING  (two-level: global + per-day)
@@ -938,7 +957,7 @@ def save_pointing(pointing, jd, lo_hz, rf0, spec0, rf1, spec1,
         n_pols           = 2,
         sdr_pol0_index   = 0,
         sdr_pol1_index   = 1,
-        tracker_update_sec = 20,
+        tracker_update_sec = 45,
         # -- Site --------------------------------------------------------------
         site_name        = 'Leuschner Observatory',
         lat_deg          = LAT_DEG,
